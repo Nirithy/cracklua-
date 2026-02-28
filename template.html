@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lua 解密工具 (WASM版)</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 2em auto; padding: 0 1em; line-height: 1.6; }
+        .card { border: 1px solid #ddd; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        select, input[type="file"] { width: 100%; padding: 8px; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; }
+        #status { margin-top: 20px; padding: 10px; border-radius: 4px; display: none; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+</head>
+<body>
+    <h1>Lua 解密工具</h1>
+    <div class="card">
+        <div class="form-group">
+            <label for="decryptType">选择解密类型:</label>
+            <select id="decryptType">
+                <option value="andlua">AndLua (Stage 1 + Stage 2)</option>
+                <option value="luaappx">LuaAppX Pro (Fake AES-CTR)</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="fileInput">选择加密文件 (.lua / .luac):</label>
+            <input type="file" id="fileInput">
+        </div>
+        <button id="decryptBtn">一键解密</button>
+        <div id="status"></div>
+    </div>
+
+    <!-- WASM_JS_PLACEHOLDER -->
+
+    <script>
+        const decryptBtn = document.getElementById('decryptBtn');
+        const fileInput = document.getElementById('fileInput');
+        const decryptType = document.getElementById('decryptType');
+        const statusDiv = document.getElementById('status');
+
+        function showStatus(msg, isError = false) {
+            statusDiv.textContent = msg;
+            statusDiv.className = isError ? 'error' : 'success';
+            statusDiv.style.display = 'block';
+        }
+
+        decryptBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) {
+                showStatus('请先选择文件', true);
+                return;
+            }
+
+            if (typeof Module === 'undefined' || !Module.calledRun) {
+                 showStatus('WASM 模块尚未就绪，请稍候...', true);
+                 return;
+            }
+
+            decryptBtn.disabled = true;
+            showStatus('正在处理...');
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+
+                // Allocate memory in WASM
+                const inputPtr = Module._malloc(uint8Array.length);
+                Module.HEAPU8.set(uint8Array, inputPtr);
+
+                const outLenPtr = Module._malloc(4);
+                let resultPtr = 0;
+
+                if (decryptType.value === 'andlua') {
+                    resultPtr = Module._decrypt_andlua(inputPtr, uint8Array.length, outLenPtr);
+                } else {
+                    resultPtr = Module._decrypt_luaappx(inputPtr, uint8Array.length, outLenPtr);
+                }
+
+                if (resultPtr === 0) {
+                    showStatus('解密失败，请检查文件格式是否正确', true);
+                } else {
+                    const outLen = Module.getValue(outLenPtr, 'i32');
+                    const decryptedData = new Uint8Array(Module.HEAPU8.buffer, resultPtr, outLen);
+
+                    // Trigger download
+                    const blob = new Blob([decryptedData], { type: 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'decrypted_' + file.name;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+
+                    showStatus('解密成功！文件已开始下载。');
+                    Module._free_result(resultPtr);
+                }
+
+                Module._free(inputPtr);
+                Module._free(outLenPtr);
+            } catch (err) {
+                console.error(err);
+                showStatus('发生错误: ' + err.message, true);
+            } finally {
+                decryptBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
