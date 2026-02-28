@@ -89,18 +89,24 @@ var Module=typeof Module!="undefined"?Module:{};var moduleOverrides=Object.assig
                     showStatus('解密失败，请检查文件格式是否正确', true);
                 } else {
                     const outLen = Module.HEAP32[outLenPtr >> 2];
-                    const decryptedData = new Uint8Array(Module.HEAPU8.buffer, resultPtr, outLen);
+                    // Use slice to ensure we have a fresh copy of the data, not a view into the WASM heap
+                    const decryptedData = new Uint8Array(Module.HEAPU8.buffer, resultPtr, outLen).slice();
 
                     // Trigger download
                     const blob = new Blob([decryptedData], { type: 'application/octet-stream' });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
+                    a.style.display = 'none';
                     a.href = url;
                     a.download = 'decrypted_' + file.name;
                     document.body.appendChild(a);
                     a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
+
+                    // Delay cleanup to allow some mobile browsers to initiate the download
+                    setTimeout(() => {
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    }, 100);
 
                     showStatus('解密成功！文件已开始下载。');
                     Module._free_result(resultPtr);
