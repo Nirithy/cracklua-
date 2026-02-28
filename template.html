@@ -85,7 +85,7 @@
                 if (resultPtr === 0) {
                     showStatus('解密失败，请检查文件格式是否正确', true);
                 } else {
-                    const outLen = Module.getValue(outLenPtr, 'i32');
+                    const outLen = Module.HEAP32[outLenPtr >> 2];
                     const decryptedData = new Uint8Array(Module.HEAPU8.buffer, resultPtr, outLen);
 
                     // Trigger download
