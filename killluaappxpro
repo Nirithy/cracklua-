@@ -1,0 +1,115 @@
+import os
+import base64
+import zlib
+import struct
+
+# ================= 配置区域 =================
+INPUT_FILE = "AboutActivity.lua"
+OUTPUT_FILE = "decrypted.luac"
+SIGNATURE = b"LuaAppX Pro=" 
+# ===========================================
+
+def xor_bytes(a, b):
+    """两个 bytes 进行异或"""
+    return bytes(x ^ y for x, y in zip(a, b))
+
+def inc_bytes_be(iv):
+    """模拟 C 代码中的 128位 大端序自增"""
+    # 将 bytes 转为大整数
+    val = int.from_bytes(iv, byteorder='big')
+    val += 1
+    # 转回 bytes (16字节)
+    return val.to_bytes(16, byteorder='big')
+
+def fake_aes_ctr_decrypt(data, key, iv):
+    """
+    模拟 sub_86F74 的逻辑：
+    Keystream = Key ^ IV
+    Data = Data ^ Keystream
+    IV++
+    """
+    out = bytearray()
+    curr_iv = iv
+    
+    # 按 16 字节分块处理
+    for i in range(0, len(data), 16):
+        chunk = data[i : i+16]
+        
+        # 核心算法：Keystream = Key XOR Current_IV
+        # 原文代码: v21 = veorq_s8(v34, v16); (v34是IV, v16是Key)
+        keystream_block = xor_bytes(key, curr_iv)
+        
+        # 解密当前块
+        # 如果最后一块不足16字节，keystream截断使用
+        decrypted_chunk = xor_bytes(chunk, keystream_block[:len(chunk)])
+        out.extend(decrypted_chunk)
+        
+        # IV 自增 (模拟 v29 = v28 + 1 ... 那段循环)
+        curr_iv = inc_bytes_be(curr_iv)
+        
+    return bytes(out)
+
+def main():
+    if not os.path.exists(INPUT_FILE):
+        print(f"File {INPUT_FILE} not found.")
+        return
+
+    print(f"[*] Reading {INPUT_FILE}...")
+    with open(INPUT_FILE, "rb") as f:
+        data = f.read()
+
+    # 1. Base64 Decode
+    b64_data = data[12:]
+    try:
+        decoded = base64.b64decode(b64_data)
+        print("[+] Base64 decoded.")
+    except Exception as e:
+        print(f"[!] Base64 error: {e}")
+        return
+
+    if len(decoded) < 64:
+        print("[!] Data too short.")
+        return
+
+    # 2. Extract Keys
+    key2, iv2 = decoded[0:16], decoded[16:32]
+    key1, iv1 = decoded[32:48], decoded[48:64]
+    
+    # 3. Zlib Decompress
+    try:
+        payload = zlib.decompress(decoded[64:])
+        print(f"[+] Zlib decompressed. Size: {len(payload)}")
+    except:
+        try:
+            payload = zlib.decompress(decoded[64:], -15)
+            print(f"[+] Zlib (Raw) decompressed. Size: {len(payload)}")
+        except Exception as e:
+            print(f"[!] Zlib failed: {e}")
+            return
+
+    # 4. Decrypt (Fake AES CTR)
+    print("[*] Starting Fake AES-CTR Decryption...")
+    
+    # 第一层解密 (Key1, IV1)
+    temp = fake_aes_ctr_decrypt(payload, key1, iv1)
+    
+    # 第二层解密 (Key2, IV2)
+    final = fake_aes_ctr_decrypt(temp, key2, iv2)
+    
+    # 5. Check Head
+    head = final[:4]
+    print(f"[*] Result Head: {head.hex()}")
+    
+    # 标准 Lua 头: 1B 4C 75 61
+    # LuaJIT 头:   1B 4C 4A
+    if head.startswith(b'\x1bL'):
+        print("[SUCCESS] Found valid Lua header!")
+    else:
+        print("[WARNING] Header does not match standard Lua, but saving anyway.")
+
+    with open(OUTPUT_FILE, "wb") as f:
+        f.write(final)
+    print(f"[+] Saved to {OUTPUT_FILE}")
+
+if __name__ == "__main__":
+    main()
